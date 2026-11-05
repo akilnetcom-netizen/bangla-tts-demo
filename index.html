@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="bn">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BD TTS Demo — বাংলা টেক্সট টু স্পিচ</title>
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.min.js"></script>
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;font-family:"Noto Sans Bengali",system-ui,sans-serif;background:#0F2A44;color:#fff;min-height:100vh}
+  .wrap{max-width:820px;margin:0 auto;padding:24px 16px 48px}
+  h1{font-size:28px;margin:8px 0 4px}
+  p.sub{color:#bcd6ea;margin:0 0 18px}
+  .card{background:#16365a;border:1px solid #2a5a86;border-radius:14px;padding:18px;margin:14px 0}
+  textarea{width:100%;min-height:110px;background:#0b2238;color:#fff;border:1px solid #2a5a86;border-radius:10px;padding:12px;font-size:18px;line-height:1.7}
+  button{background:#14b8a6;color:#04222b;border:0;border-radius:10px;padding:12px 18px;font-size:17px;font-weight:700;cursor:pointer;margin:6px 6px 0 0}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  button.secondary{background:#e2e8f0;color:#0F2A44}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  label{font-size:14px;color:#bcd6ea}
+  input[type=range]{accent-color:#14b8a6}
+  #status{background:#0b2238;border-radius:10px;padding:12px;font-size:15px;line-height:1.6;white-space:pre-wrap;word-break:break-word}
+  progress{width:100%;height:10px}
+  audio{width:100%;margin-top:10px}
+  .small{font-size:14px;color:#bcd6ea;line-height:1.7}
+  code{background:#0b2238;padding:2px 6px;border-radius:6px}
+  ol li{margin:6px 0;line-height:1.7}
+  a{color:#5eead4}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🎙️ BD TTS Demo</h1>
+  <p class="sub">বাংলা লেখা → আপনার নিজের VITS মডেলের কণ্ঠে অডিও। কোনো সার্ভার লাগে না, মডেল সরাসরি ব্রাউজারে চলে।</p>
+
+  <div class="card">
+    <div class="row"><b>ধাপ ১ — মডেল লোড করুন</b></div>
+    <p class="small">মডেল: <code>demoqqq/banglatts-merged-news</code><br>
+    ফাইল: <code>model_fullmeta.onnx</code> (১১৪ MB) + <code>tokens_sherpa.txt</code><br>
+    প্রথমবার লোড হতে সময় লাগবে, কারণ ১১৪ MB ডাউনলোড হবে। দ্বিতীয়বার ব্রাউজার ক্যাশ থেকে দ্রুত হবে।</p>
+    <button id="loadBtn">মডেল লোড করুন</button>
+    <progress id="prog" value="0" max="100" style="display:none"></progress>
+    <div id="status" style="margin-top:10px">এখনো মডেল লোড হয়নি। উপরের বাটন চাপুন।</div>
+  </div>
+
+  <div class="card">
+    <b>ধাপ ২ — বাংলা লিখুন</b>
+    <textarea id="text">আজকের প্রধান খবরে স্বাগতম।</textarea>
+    <div style="margin-top:8px">
+      <button class="secondary" onclick="setText('আজকের প্রধান খবরে স্বাগতম।')">নমুনা ১</button>
+      <button class="secondary" onclick="setText('২০২৬ সালে ৫% কর বাড়ানো হয়েছে।')">নমুনা ২</button>
+      <button class="secondary" onclick="setText('আমি বাংলাদেশকে ভালোবাসি।')">নমুনা ৩</button>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <label>গতি (Speed): <span id="speedVal">1.0x</span></label>
+      <input type="range" id="speed" min="0.5" max="1.5" step="0.1" value="1.0" style="flex:1">
+    </div>
+    <p class="small">সেটিংস: noiseScale 0.667, noiseScaleW 0.8, lengthScale = 1 ÷ গতি, 22050 Hz</p>
+    <button id="genBtn" disabled>🔊 অডিও বানান</button>
+    <button id="dlBtn" class="secondary" disabled>⬇️ WAV ডাউনলোড</button>
+    <audio id="player" controls style="display:none"></audio>
+    <div id="info" class="small" style="margin-top:8px"></div>
+  </div>
+
+  <div class="card">
+    <b>ইতিহাস (History)</b>
+    <div id="history" class="small">এখনো কিছু বানানো হয়নি।</div>
+  </div>
+
+  <div class="card">
+    <b>এটা কীভাবে কাজ করে? — শেখার জন্য</b>
+    <ol>
+      <li><b>লেখা → সংখ্যা:</b> প্রতিটি বাংলা অক্ষরকে <code>tokens_sherpa.txt</code> দিয়ে একটা নম্বরে (token id) বদলানো হয়। যেমন ‘অ’ = 11, ‘ক’ = 22, space = 91।</li>
+      <li><b>BOS / EOS + Blank:</b> শুরুতে BOS (2) আর শেষে EOS (1) যোগ করা হয়। sherpa-onnx-এর Coqui নিয়মে প্রতিটি টোকেনের পরে Blank (3) বসে, আর শেষে কমা (90) তারপর EOS (1) থাকে।</li>
+      <li><b>মডেল চালানো:</b> <code>onnxruntime-web</code> দিয়ে <code>model_fullmeta.onnx</code> চালানো হয়। ইনপুট ৩টা: <code>input</code>, <code>input_lengths</code>, <code>scales</code> = [0.667, lengthScale, 0.8]। আউটপুট <code>output</code> হলো 22050 Hz অডিও।</li>
+      <li><b>বাজানো / সেভ:</b> অডিওটা ব্রাউজারে বাজানো হয়, আর WAV ফাইল হিসেবে ডাউনলোড করা যায়।</li>
+    </ol>
+    <p class="small">সোর্স: <a href="https://huggingface.co/demoqqq/banglatts-merged-news/tree/main" target="_blank" rel="noopener">Hugging Face — demoqqq/banglatts-merged-news</a><br>
+    এই ফাইলটা GitHub Pages / Netlify / Vercel-এ ফ্রিতে হোস্ট করা যাবে। মডেল ফাইলটা Hugging Face থেকেই লোড হয়, তাই এই HTML ফাইলের সাথে মডেল কপি করতে হয় না।</p>
+  </div>
+</div>
+
+<script>
+const MODEL_URL = "https://huggingface.co/demoqqq/banglatts-merged-news/resolve/main/model_fullmeta.onnx";
+const TOKENS_URL = "https://huggingface.co/demoqqq/banglatts-merged-news/resolve/main/tokens_sherpa.txt";
+const SAMPLE_RATE = 22050;
+let session = null, tokenMap = new Map(), lastWav = null, lastBlobUrl = null;
+
+function setText(t){ document.getElementById('text').value = t; }
+function setStatus(s){ document.getElementById('status').textContent = s; }
+
+async function fetchWithProgress(url, onProgress){
+  const res = await fetch(url);
+  if(!res.ok) throw new Error("ডাউনলোড ব্যর্থ: " + res.status + " " + url);
+  const total = Number(res.headers.get('content-length') || 0);
+  if(!res.body || !total){ const buf = await res.arrayBuffer(); return buf; }
+  const reader = res.body.getReader();
+  const chunks = []; let received = 0;
+  while(true){
+    const {done, value} = await reader.read();
+    if(done) break;
+    chunks.push(value); received += value.length;
+    onProgress(Math.round(received/total*100));
+  }
+  const all = new Uint8Array(received); let off = 0;
+  for(const c of chunks){ all.set(c, off); off += c.length; }
+  return all.buffer;
+}
+
+function parseTokens(text){
+  // প্রতি লাইন: "<token> <id>" — space টোকেনের লাইনে token খালি দেখাতে পারে, সেটা space (91)
+  const map = new Map();
+  for(const line of text.split("\n")){
+    const clean = line.replace(/\r$/, '');
+    if(!clean) continue;
+    const lastSpace = clean.lastIndexOf(' ');
+    if(lastSpace === -1){ map.set(' ', parseInt(clean, 10)); continue; }
+    const token = clean.slice(0, lastSpace);
+    const id = parseInt(clean.slice(lastSpace+1), 10);
+    if(!isNaN(id)) map.set(token === '' ? ' ' : token, id);
+  }
+  // নিশ্চিত করা: space = 91
+  if(!map.has(' ')) map.set(' ', 91);
+  return map;
+}
+
+function textToIds(text){
+  const ids = []; let unknown = 0;
+  for(const ch of Array.from(text)){
+    if(tokenMap.has(ch)) ids.push(tokenMap.get(ch));
+    else unknown++;
+  }
+  return {ids, unknown};
+}
+
+function buildCoquiSequence(ids){
+  // sherpa-onnx CoquiPhonemesToIds (frontend="characters", তাই Generate()-এর AddBlank চলে না):
+  // [BOS=2, BLANK=3, id, BLANK, id, ..., BLANK, comma=90, EOS=1]
+  const seq = [2, 3];
+  for(const id of ids){ seq.push(id); seq.push(3); }
+  seq.push(90); seq.push(1);
+  return seq;
+}
+
+document.getElementById('loadBtn').onclick = async () => {
+  const prog = document.getElementById('prog');
+  prog.style.display = 'block';
+  try{
+    setStatus("tokens_sherpa.txt ডাউনলোড হচ্ছে…");
+    const tokText = await (await fetch(TOKENS_URL)).text();
+    tokenMap = parseTokens(tokText);
+    setStatus("টোকেন লোড হয়েছে: " + tokenMap.size + "টি। এখন মডেল (১১৪ MB) ডাউনলোড হচ্ছে…");
+    const buf = await fetchWithProgress(MODEL_URL, p => { prog.value = p; setStatus("মডেল ডাউনলোড হচ্ছে… " + p + "%"); });
+    setStatus("মডেল ডাউনলোড শেষ। ব্রাউজারে লোড হচ্ছে…");
+    ort.env.wasm.numThreads = 4;
+    session = await ort.InferenceSession.create(buf, {executionProviders: ['wasm']});
+    setStatus("✅ মডেল তৈরি! এখন নিচে বাংলা লিখে ‘অডিও বানান’ চাপুন।\nইনপুট: " + session.inputNames.join(', ') + "\nআউটপুট: " + session.outputNames.join(', '));
+    document.getElementById('genBtn').disabled = false;
+  }catch(e){
+    setStatus("❌ সমস্যা হয়েছে: " + (e && e.message ? e.message : e) + "\nইন্টারনেট চেক করে আবার চেষ্টা করুন।");
+  }
+};
+
+document.getElementById('speed').oninput = (e)=>{
+  document.getElementById('speedVal').textContent = Number(e.target.value).toFixed(1) + "x";
+};
+
+function encodeWav(samples, sampleRate){
+  const buf = new ArrayBuffer(44 + samples.length*2);
+  const v = new DataView(buf);
+  const writeStr = (off, s)=>{ for(let i=0;i<s.length;i++) v.setUint8(off+i, s.charCodeAt(i)); };
+  writeStr(0,'RIFF'); v.setUint32(4, 36+samples.length*2, true); writeStr(8,'WAVE'); writeStr(12,'fmt ');
+  v.setUint32(16,16,true); v.setUint16(20,1,true); v.setUint16(22,1,true); v.setUint32(24,sampleRate,true);
+  v.setUint32(28,sampleRate*2,true); v.setUint16(32,2,true); v.setUint16(34,16,true); writeStr(36,'data');
+  v.setUint32(40,samples.length*2,true);
+  for(let i=0;i<samples.length;i++){
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    v.setInt16(44+i*2, s<0 ? s*0x8000 : s*0x7FFF, true);
+  }
+  return new Blob([buf], {type:'audio/wav'});
+}
+
+function splitSentences(text){
+  // । . ? ! দিয়ে ভাগ করা, প্রতিটি অংশ আলাদা করে বানিয়ে জোড়া দেওয়া হয়
+  const parts = text.match(/[^।.!?]+[।.!?]?/g) || [text];
+  return parts.map(s=>s.trim()).filter(Boolean);
+}
+
+document.getElementById('genBtn').onclick = async () => {
+  if(!session) return;
+  const text = document.getElementById('text').value.trim();
+  if(!text){ alert("আগে বাংলা লিখুন।"); return; }
+  const speed = Number(document.getElementById('speed').value);
+  const info = document.getElementById('info');
+  const btn = document.getElementById('genBtn');
+  btn.disabled = true;
+  try{
+    const chunks = splitSentences(text);
+    let all = [];
+    for(let ci=0; ci<chunks.length; ci++){
+      const {ids, unknown} = textToIds(chunks[ci]);
+      if(!ids.length) continue;
+      info.textContent = "বানানো হচ্ছে… অংশ " + (ci+1) + "/" + chunks.length + " — টোকেন: " + ids.length + (unknown ? " (অজানা অক্ষর বাদ: "+unknown+")" : "");
+      const seq = buildCoquiSequence(ids); // BOS=2, EOS=1 (। = 1)
+      const input = new ort.Tensor('int64', BigInt64Array.from(seq.map(v=>BigInt(v))), [1, seq.length]);
+      const input_lengths = new ort.Tensor('int64', BigInt64Array.from([BigInt(seq.length)]), [1]);
+      const scales = new ort.Tensor('float32', Float32Array.from([0.667, 1/speed, 0.8]), [3]);
+      const out = await session.run({input, input_lengths, scales});
+      const wav = out.output.data; // Float32Array, [1,1,N]
+      all.push(...wav);
+      // ছোট বিরতি: বাক্যের মাঝে 0.2 সেকেন্ড নীরবতা
+      if(ci < chunks.length-1){ const sil = Math.floor(SAMPLE_RATE*0.2); for(let i=0;i<sil;i++) all.push(0); }
+    }
+    lastWav = Float32Array.from(all);
+    const dur = (lastWav.length / SAMPLE_RATE).toFixed(2);
+    info.textContent = "✅ তৈরি! সময়: " + dur + " সেকেন্ড, স্যাম্পল: " + lastWav.length + ", 22050 Hz";
+    const ctx = new (window.AudioContext || window.webkitAudioContext)({sampleRate: SAMPLE_RATE});
+    const abuf = ctx.createBuffer(1, lastWav.length, SAMPLE_RATE);
+    abuf.copyToChannel(lastWav, 0);
+    const src = ctx.createBufferSource(); src.buffer = abuf; src.connect(ctx.destination); src.start();
+    const blob = encodeWav(lastWav, SAMPLE_RATE);
+    if(lastBlobUrl) URL.revokeObjectURL(lastBlobUrl);
+    lastBlobUrl = URL.createObjectURL(blob);
+    const player = document.getElementById('player');
+    player.src = lastBlobUrl; player.style.display = 'block';
+    document.getElementById('dlBtn').disabled = false;
+    const hist = document.getElementById('history');
+    const item = document.createElement('div');
+    item.textContent = "• " + new Date().toLocaleTimeString('bn-BD') + " — " + text.slice(0,60) + " (" + dur + "s)";
+    if(hist.textContent.includes('এখনো')) hist.textContent = '';
+    hist.prepend(item);
+  }catch(e){
+    info.textContent = "❌ সমস্যা: " + (e && e.message ? e.message : e);
+  }finally{ btn.disabled = false; }
+};
+
+document.getElementById('dlBtn').onclick = () => {
+  if(!lastBlobUrl) return;
+  const a = document.createElement('a');
+  a.href = lastBlobUrl; a.download = 'bangla-tts.wav'; a.click();
+};
+</script>
+</body>
+</html>
